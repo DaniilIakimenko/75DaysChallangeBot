@@ -90,3 +90,11 @@ cron.schedule('0 12 * * 1', async () => { // Каждый понедельник
 // Запуск бота
 bot.launch();
 console.log('Бот запущен!');
+
+// Добавляем простой HTTP-сервер для Render
+const http = require('http');
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('Bot is alive!');
+});
+server.listen(process.env.PORT || 3000);
