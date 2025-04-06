@@ -207,6 +207,21 @@ async function startServer(retryCount = 0) {
   }
 }
 
+// Обработка завершения работы
+function setupShutdownHandlers() {
+  process.once('SIGTERM', () => {
+    console.log('🛑 SIGTERM received');
+    bot.stop();
+    process.exit(0);
+  });
+  
+  process.once('SIGINT', () => {
+    console.log('🛑 SIGINT received');
+    bot.stop();
+    process.exit(0);
+  });
+}
+
 // Основной запуск
 (async () => {
   setupShutdownHandlers();
