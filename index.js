@@ -69,25 +69,31 @@ bot.start(async (ctx) => {
 
 // Обработка имени
 bot.on('text', async (ctx) => {
-  const name = ctx.message.text;
-  const newUser = new User({ telegramId: ctx.from.id, name });
-  await newUser.save();
-  await ctx.reply(`Отлично, ${name}! Теперь введи свой возраст.`);
-});
-
-// Напоминания (каждый день в 07:30)
-cron.schedule('30 7 * * *', async () => {
-  const users = await User.find({});
-  users.forEach(user => {
-    bot.telegram.sendMessage(
-      user.telegramId,
-      `День ${user.currentDay + 1}/75. Ты проснулся вовремя?`,
-      Markup.inlineKeyboard([
-        Markup.button.callback('Да', 'woke_up_yes'),
-        Markup.button.callback('Нет', 'woke_up_no'),
-      ])
-    );
-  });
+  const user = await User.findOne({ telegramId: ctx.from.id });
+  if (!user) {
+    const name = ctx.message.text;
+    const newUser = new User({ telegramId: ctx.from.id, name });
+    await newUser.save();
+    await ctx.reply(`Отлично, ${name}! Теперь введи свой возраст.`);
+  } else if (!user.age) {
+    const age = parseInt(ctx.message.text);
+    if (isNaN(age)) {
+      await ctx.reply('Пожалуйста, введи возраст в виде числа.');
+    } else {
+      user.age = age;
+      await user.save();
+      await ctx.reply(`Возраст сохранен! Теперь введи свой вес (в кг).`);
+    }
+  } else if (!user.weight) {
+    const weight = parseFloat(ctx.message.text);
+    if (isNaN(weight)) {
+      await ctx.reply('Пожалуйста, введи вес в виде числа.');
+    } else {
+      user.weight = weight;
+      await user.save();
+      await ctx.reply('Вес сохранен! Челлендж готов к старту.');
+    }
+  }
 });
 
 // Обработка ответов
