@@ -206,7 +206,7 @@ async function startServer(retryCount = 0) {
       
       await ensurePortIsFree(PORT);
 
-      await bot.launch({
+      const webhookServer = await bot.launch({
         webhook: {
           domain: WEBHOOK_DOMAIN,
           port: PORT,
@@ -222,13 +222,16 @@ async function startServer(retryCount = 0) {
       setInterval(async () => {
         try {
           console.log('🔄 Sending keep-alive ping');
-          await fetch(`https://${WEBHOOK_DOMAIN}/health`);
-          console.log('✅ Keep-alive ping successful');
+          const response = await fetch(`https://${WEBHOOK_DOMAIN}/health`);
+          if (response.ok) {
+            console.log('✅ Keep-alive ping successful');
+          } else {
+            console.log('⚠️ Keep-alive ping returned non-200 status:', response.status);
+          }
         } catch (e) {
           console.log('❌ Keep-alive ping failed:', e.message);
         }
-      }, 2 * 60 * 1000); // Уменьшено до 2 минут для теста
-      
+      }, 2 * 60 * 1000); // 2 минуты
     } else {
       console.log('🔍 Starting in polling mode');
       await bot.launch();
@@ -237,24 +240,19 @@ async function startServer(retryCount = 0) {
     
     console.log('🤖 Bot is fully operational');
   } catch (error) {
-    if (error.code === 429 && retryCount < MAX_RETRIES) {
+    if ((error.code === 429 || error.code === 'EADDRINUSE') && retryCount < MAX_RETRIES) {
       const delay = error.response?.parameters?.retry_after 
         ? error.response.parameters.retry_after * 1000 
         : INITIAL_DELAY * (retryCount + 1) + Math.random() * 1000;
       
-      console.log(`⏳ Bot launch failed with 429, retrying after ${delay}ms`);
+      console.log(`⏳ Launch failed (${error.code}), retrying after ${delay}ms`);
       await bot.stop();
       await setTimeout(delay);
       return startServer(retryCount + 1);
-    } else if (error.code === 'EADDRINUSE' && retryCount < MAX_RETRIES) {
-      console.log(`⏳ Port ${PORT} is in use, retrying after delay...`);
-      await bot.stop();
-      await setTimeout(INITIAL_DELAY * (retryCount + 1));
-      return startServer(retryCount + 1);
     }
     
-    console.error('💥 Failed to start bot:', error);
-    process.exit(1);
+    console.error('💥 Failed to start bot after max retries:', error);
+    throw error;
   }
 }
 
@@ -278,5 +276,12 @@ function setupShutdownHandlers() {
   console.log('🔧 Setting up shutdown handlers');
   setupShutdownHandlers();
   console.log('🚀 Initiating server start');
-  await startServer();
+  try {
+    await startServer();
+    console.log('✅ Server startup completed successfully');
+    // Не завершаем процесс, так как webhook-сервер должен работать
+  } catch (error) {
+    console.error('🛑 Server failed to start:', error);
+    process.exit(1);
+  }
 })();
