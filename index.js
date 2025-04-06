@@ -1,9 +1,19 @@
 const { Telegraf, Markup } = require('telegraf');
 const mongoose = require('mongoose');
 const cron = require('node-cron');
+const express = require('express');
 
-// Подключение к MongoDB (бесплатно через MongoDB Atlas)
-mongoose.connect('mongodb+srv://dayakimenko666:Ye6G5NcPK6yM2M6O@cluster0.qlpkysv.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0');
+// Инициализация Express
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Health check для Render
+app.get('/', (req, res) => res.send('75 Days Challenge Bot is running'));
+
+// Подключение к MongoDB
+mongoose.connect('mongodb+srv://dayakimenko666:Ye6G5NcPK6yM2M6O@cluster0.qlpkysv.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0')
+  .then(() => console.log('Connected to MongoDB'))
+  .catch(err => console.error('MongoDB connection error:', err));
 
 // Модель пользователя
 const UserSchema = new mongoose.Schema({
@@ -23,15 +33,15 @@ const UserSchema = new mongoose.Schema({
     wokeUpOnTime: Boolean,
     pagesRead: Number,
     exercised: Boolean,
-    photoProof: String, // Ссылка на фото
+    photoProof: String,
   }],
   currentDay: { type: Number, default: 0 },
 });
 
 const User = mongoose.model('User', UserSchema);
 
-// Запуск бота
-const bot = new Telegraf('8166894974:AAF1smiSyx8G5R5_NUcZC39vtb4J4wMYYtQ');
+// Инициализация бота
+const bot = new Telegraf(process.env.BOT_TOKEN || '8166894974:AAF1smiSyx8G5R5_NUcZC39vtb4J4wMYYtQ');
 
 // Команда /start
 bot.start(async (ctx) => {
@@ -69,6 +79,7 @@ bot.action('woke_up_yes', async (ctx) => {
   ctx.reply('Отлично! Сколько страниц ты прочитал?');
 });
 
+// Обработка фото
 bot.on('photo', async (ctx) => {
   const photoId = ctx.message.photo[0].file_id;
   const user = await User.findOne({ telegramId: ctx.from.id });
@@ -77,7 +88,8 @@ bot.on('photo', async (ctx) => {
   ctx.reply('Фото сохранено! Молодец!');
 });
 
-cron.schedule('0 12 * * 1', async () => { // Каждый понедельник в 12:00
+// Еженедельный отчет
+cron.schedule('0 12 * * 1', async () => {
   const users = await User.find({});
   users.forEach(user => {
     const progress = `Твой прогресс за неделю:\n` +
@@ -87,14 +99,24 @@ cron.schedule('0 12 * * 1', async () => { // Каждый понедельник
   });
 });
 
-// Запуск бота
-bot.launch();
-console.log('Бот запущен!');
+// Запуск в зависимости от среды
+if (process.env.NODE_ENV === 'production') {
+  // Режим для Render (webhook)
+  app.listen(PORT, () => {
+    console.log(`Server started on port ${PORT}`);
+    bot.launch({
+      webhook: {
+        domain: 'seven5dayschallangebot.onrender.com',
+        port: PORT
+      }
+    }).then(() => console.log('Bot launched in webhook mode'));
+  });
+} else {
+  // Локальный режим (polling)
+  console.log('Local development mode');
+  bot.launch().then(() => console.log('Bot launched in polling mode'));
+}
 
-// Добавляем простой HTTP-сервер для Render
-const http = require('http');
-const server = http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end('Bot is alive!');
-});
-server.listen(process.env.PORT || 3000);
+// Обработка завершения
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
