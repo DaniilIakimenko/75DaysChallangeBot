@@ -262,6 +262,14 @@ cron.schedule('0 12 * * 1', async () => {
 async function startServer(retryCount = 0) {
   try {
     console.log('🌍 Starting in polling mode');
+    await bot.telegram.getWebhookInfo().then(info => {
+      console.log('ℹ️ Current webhook info:', JSON.stringify(info));
+      if (info.url) {
+        console.log('🧹 Deleting existing webhook...');
+        return bot.telegram.deleteWebhook({ drop_pending_updates: true });
+      }
+    });
+    console.log('🚀 Launching bot in polling mode...');
     await bot.launch();
     console.log('🤖 Bot is fully operational in polling mode');
   } catch (error) {
@@ -272,6 +280,11 @@ async function startServer(retryCount = 0) {
       console.log(`⏳ Launch failed (429), retrying after ${delay}ms`);
       await bot.stop();
       await setTimeout(delay);
+      return startServer(retryCount + 1);
+    } else if (error.code === 409) {
+      console.log('⚠️ Conflict detected, stopping bot and retrying...');
+      await bot.stop();
+      await setTimeout(5000); // Ждём 5 секунд, чтобы старый процесс завершился
       return startServer(retryCount + 1);
     }
     console.error('💥 Failed to start bot after max retries:', error);
