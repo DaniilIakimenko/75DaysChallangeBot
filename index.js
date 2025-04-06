@@ -64,35 +64,53 @@ bot.use(async (ctx, next) => {
 
 // Команда /start
 bot.start(async (ctx) => {
-  await ctx.reply('Привет! Это бот для 75-дневного челленджа. Как тебя зовут?');
+  const user = await User.findOne({ telegramId: ctx.from.id });
+  if (user) {
+    await ctx.reply(`Привет снова, ${user.name}! Ты уже зарегистрирован. Что хочешь сделать дальше?`);
+    // Здесь можно добавить меню или дальнейшие действия
+  } else {
+    await ctx.reply('Привет! Это бот для 75-дневного челленджа. Как тебя зовут?');
+  }
 });
 
-// Обработка имени
+// Обработка текстовых сообщений
 bot.on('text', async (ctx) => {
   const user = await User.findOne({ telegramId: ctx.from.id });
+  const text = ctx.message.text;
+
   if (!user) {
-    const name = ctx.message.text;
-    const newUser = new User({ telegramId: ctx.from.id, name });
-    await newUser.save();
-    await ctx.reply(`Отлично, ${name}! Теперь введи свой возраст.`);
+    // Новый пользователь
+    const newUser = new User({ telegramId: ctx.from.id, name: text });
+    try {
+      await newUser.save();
+      await ctx.reply(`Отлично, ${text}! Теперь введи свой возраст.`);
+    } catch (error) {
+      console.error('Ошибка сохранения пользователя:', error);
+      await ctx.reply('Произошла ошибка. Попробуй еще раз с командой /start.');
+    }
   } else if (!user.age) {
-    const age = parseInt(ctx.message.text);
-    if (isNaN(age)) {
-      await ctx.reply('Пожалуйста, введи возраст в виде числа.');
+    // Ввод возраста
+    const age = parseInt(text);
+    if (isNaN(age) || age <= 0) {
+      await ctx.reply('Пожалуйста, введи корректный возраст (число больше 0).');
     } else {
       user.age = age;
       await user.save();
-      await ctx.reply(`Возраст сохранен! Теперь введи свой вес (в кг).`);
+      await ctx.reply(`Возраст ${age} сохранен! Теперь введи свой вес (в кг).`);
     }
   } else if (!user.weight) {
-    const weight = parseFloat(ctx.message.text);
-    if (isNaN(weight)) {
-      await ctx.reply('Пожалуйста, введи вес в виде числа.');
+    // Ввод веса
+    const weight = parseFloat(text);
+    if (isNaN(weight) || weight <= 0) {
+      await ctx.reply('Пожалуйста, введи корректный вес (число больше 0).');
     } else {
       user.weight = weight;
       await user.save();
-      await ctx.reply('Вес сохранен! Челлендж готов к старту.');
+      await ctx.reply('Вес сохранен! Ты готов начать челлендж. Используй /start для дальнейших действий.');
     }
+  } else {
+    // Пользователь уже зарегистрирован полностью
+    await ctx.reply('Ты уже ввел все данные. Используй /start для дальнейших действий.');
   }
 });
 
