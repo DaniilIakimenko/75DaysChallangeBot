@@ -3,13 +3,14 @@ const mongoose = require('mongoose');
 const cron = require('node-cron');
 const { setTimeout } = require('timers/promises');
 const fetch = require('node-fetch');
+const net = require('net');
 
 // Конфигурация
 const BOT_TOKEN = process.env.BOT_TOKEN || '8166894974:AAF1smiSyx8G5R5_NUcZC39vtb4J4wMYYtQ';
 const PORT = process.env.PORT || 3000;
 const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN || 'seven5dayschallangebot.onrender.com';
 const MAX_RETRIES = 5;
-const INITIAL_DELAY = 5000; // 5 seconds
+const INITIAL_DELAY = 10000; // Увеличено до 10 секунд для большей надежности
 
 // Инициализация бота
 const bot = new Telegraf(BOT_TOKEN);
@@ -23,7 +24,7 @@ mongoose.connect('mongodb+srv://dayakimenko666:Ye6G5NcPK6yM2M6O@cluster0.qlpkysv
 .then(() => console.log('✅ Connected to MongoDB'))
 .catch(err => console.error('❌ MongoDB connection error:', err));
 
-// Модель пользователя (остается без изменений)
+// Модель пользователя
 const UserSchema = new mongoose.Schema({
   telegramId: { type: Number, unique: true },
   name: String,
@@ -112,27 +113,25 @@ cron.schedule('0 12 * * 1', async () => {
   users.forEach(user => {
     const progress = `Твой прогресс за неделю:\n` +
       `Дней выполнено: ${user.dailyCheckins.filter(c => c.wokeUpOnTime).length}/7\n` +
-      `Страниц прочитано: ${user.dailyCheckins.reduce((sum, c) => sum + c.pagesRead, 0)}`;
+      `Страниц прочитано: ${user.dailyCheckins.reduce((sum, c) => sum + (c.pagesRead || 0), 0)}`;
     bot.telegram.sendMessage(user.telegramId, progress);
   });
 });
 
+// Улучшенная функция установки webhook
 async function setupWebhook(retryCount = 0) {
   try {
     console.log(`🔄 Attempt ${retryCount + 1}: Setting webhook...`);
     
-    // Проверяем текущий webhook
     const currentWebhook = await bot.telegram.getWebhookInfo();
     if (currentWebhook.url === `https://${WEBHOOK_DOMAIN}/webhook`) {
       console.log('✅ Webhook already set correctly');
       return true;
     }
 
-    // Удаляем существующий webhook
     await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-    await setTimeout(1000); // Краткая пауза
+    await setTimeout(1000);
     
-    // Устанавливаем новый webhook
     await bot.telegram.setWebhook(`https://${WEBHOOK_DOMAIN}/webhook`, {
       max_connections: 40,
       allowed_updates: ['message', 'callback_query']
@@ -148,12 +147,30 @@ async function setupWebhook(retryCount = 0) {
 
     const delay = error.response?.parameters?.retry_after 
       ? error.response.parameters.retry_after * 1000 
-      : INITIAL_DELAY * (retryCount + 1) + Math.random() * 1000; // Случайная задержка
+      : INITIAL_DELAY * (retryCount + 1) + Math.random() * 1000;
     
     console.log(`⏳ Retry after ${delay}ms (Reason: ${error.description || error.message})`);
     await setTimeout(delay);
     return setupWebhook(retryCount + 1);
   }
+}
+
+// Функция проверки и освобождения порта
+async function ensurePortIsFree(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.log(`⚠️ Port ${port} is in use, waiting to free it...`);
+        setTimeout(resolve, 2000); // Даем время старому процессу завершиться
+      }
+    });
+    server.once('listening', () => {
+      server.close();
+      resolve();
+    });
+    server.listen(port);
+  });
 }
 
 // Функция запуска сервера
@@ -162,21 +179,8 @@ async function startServer(retryCount = 0) {
     if (process.env.NODE_ENV === 'production') {
       await setupWebhook();
       
-      // Проверяем, не занят ли порт перед запуском
-      const server = require('net').createServer();
-      await new Promise((resolve, reject) => {
-        server.once('error', (err) => {
-          if (err.code === 'EADDRINUSE') {
-            console.log(`⚠️ Port ${PORT} is already in use, attempting to recover...`);
-            reject(err);
-          }
-        });
-        server.once('listening', () => {
-          server.close();
-          resolve();
-        });
-        server.listen(PORT);
-      });
+      // Убеждаемся, что порт свободен
+      await ensurePortIsFree(PORT);
 
       // Запускаем webhook сервер
       await bot.launch({
@@ -184,7 +188,7 @@ async function startServer(retryCount = 0) {
           domain: WEBHOOK_DOMAIN,
           port: PORT,
           hookPath: '/webhook',
-          tlsOptions: null // Render сам обрабатывает TLS
+          tlsOptions: null
         }
       });
       
@@ -198,10 +202,8 @@ async function startServer(retryCount = 0) {
         } catch (e) {
           console.log('Keep-alive ping failed (normal for free tier)');
         }
-      }, 4 * 60 * 1000); // 4 минуты
-      
+      }, 4 * 60 * 1000);
     } else {
-      // Локальный режим (polling)
       await bot.launch();
       console.log('🔍 Bot running in polling mode');
     }
@@ -214,10 +216,12 @@ async function startServer(retryCount = 0) {
         : INITIAL_DELAY * (retryCount + 1) + Math.random() * 1000;
       
       console.log(`⏳ Bot launch failed with 429, retrying after ${delay}ms`);
+      await bot.stop(); // Останавливаем бота перед повторной попыткой
       await setTimeout(delay);
       return startServer(retryCount + 1);
     } else if (error.code === 'EADDRINUSE' && retryCount < MAX_RETRIES) {
       console.log(`⏳ Port ${PORT} is in use, retrying after delay...`);
+      await bot.stop(); // Останавливаем бота
       await setTimeout(INITIAL_DELAY * (retryCount + 1));
       return startServer(retryCount + 1);
     }
