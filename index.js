@@ -200,45 +200,15 @@ async function ensurePortIsFree(port) {
 // Функция запуска сервера
 async function startServer(retryCount = 0) {
   try {
-    if (process.env.NODE_ENV === 'production') {
-      console.log('🌍 Starting in production mode');
-      await setupWebhook();
-      
-      await ensurePortIsFree(PORT);
-
-      const webhookServer = await bot.launch({
-        webhook: {
-          domain: WEBHOOK_DOMAIN,
-          port: PORT,
-          hookPath: '/webhook',
-          tlsOptions: null
-        }
-      });
-      
-      console.log(`🚀 Bot running in webhook mode on port ${PORT}`);
-      console.log(`🌐 Webhook URL: https://${WEBHOOK_DOMAIN}/webhook`);
-      
-      // Keep-alive для Render
-      setInterval(async () => {
-        try {
-          console.log('🔄 Sending keep-alive ping');
-          const response = await fetch(`https://${WEBHOOK_DOMAIN}/health`);
-          if (response.ok) {
-            console.log('✅ Keep-alive ping successful');
-          } else {
-            console.log('⚠️ Keep-alive ping returned non-200 status:', response.status);
-          }
-        } catch (e) {
-          console.log('❌ Keep-alive ping failed:', e.message);
-        }
-      }, 2 * 60 * 1000); // 2 минуты
-    } else {
-      console.log('🔍 Starting in polling mode');
-      await bot.launch();
-      console.log('🔍 Bot running in polling mode');
-    }
+    console.log('🌍 Starting in production mode');
+    // Устанавливаем webhook, но не используем его
+    await setupWebhook();
     
-    console.log('🤖 Bot is fully operational');
+    // Переключаемся на polling
+    console.log('🔍 Switching to polling mode for testing');
+    await bot.launch(); // Polling вместо webhook
+    
+    console.log('🤖 Bot is fully operational in polling mode');
   } catch (error) {
     if ((error.code === 429 || error.code === 'EADDRINUSE') && retryCount < MAX_RETRIES) {
       const delay = error.response?.parameters?.retry_after 
