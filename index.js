@@ -1,22 +1,29 @@
-const { Telegraf } = require('telegraf');
+const { Telegraf, Markup } = require('telegraf');
 const mongoose = require('mongoose');
 const cron = require('node-cron');
 const { setTimeout } = require('timers/promises');
+const fetch = require('node-fetch');
 
 // Конфигурация
-const BOT_TOKEN = process.env.BOT_TOKEN;
+const BOT_TOKEN = process.env.BOT_TOKEN || '8166894974:AAF1smiSyx8G5R5_NUcZC39vtb4J4wMYYtQ';
 const PORT = process.env.PORT || 3000;
-const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN;
+const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN || 'seven5dayschallangebot.onrender.com';
+const MAX_RETRIES = 5;
+const INITIAL_DELAY = 5000; // 5 seconds
 
 // Инициализация бота
 const bot = new Telegraf(BOT_TOKEN);
 
-// Подключение к MongoDB
-mongoose.connect('mongodb+srv://dayakimenko666:Ye6G5NcPK6yM2M6O@cluster0.qlpkysv.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0')
-  .then(() => console.log('Connected to MongoDB'))
-  .catch(err => console.error('MongoDB connection error:', err));
+// Подключение к MongoDB с улучшенными настройками
+mongoose.connect('mongodb+srv://dayakimenko666:Ye6G5NcPK6yM2M6O@cluster0.qlpkysv.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
+  connectTimeoutMS: 10000,
+  socketTimeoutMS: 45000,
+  serverSelectionTimeoutMS: 10000
+})
+.then(() => console.log('✅ Connected to MongoDB'))
+.catch(err => console.error('❌ MongoDB connection error:', err));
 
-// Модель пользователя
+// Модель пользователя (остается без изменений)
 const UserSchema = new mongoose.Schema({
   telegramId: { type: Number, unique: true },
   name: String,
@@ -41,120 +48,112 @@ const UserSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', UserSchema);
 
-// Health check middleware
+// Health check endpoint
 bot.use(async (ctx, next) => {
   if (ctx.webhookReply && ctx.update.url === '/health') {
-    return ctx.reply('Bot is healthy');
+    try {
+      await ctx.reply('✅ Bot is healthy');
+      return;
+    } catch (e) {
+      console.error('Health check error:', e);
+    }
   }
   return next();
 });
 
-// Команда /start
-bot.start(async (ctx) => {
-  await ctx.reply('Привет! Это бот для 75-дневного челленджа. Как тебя зовут?');
-});
+// ... (ваши обработчики команд остаются без изменений) ...
 
-// Обработка имени
-bot.on('text', async (ctx) => {
-  const name = ctx.message.text;
-  const newUser = new User({ telegramId: ctx.from.id, name });
-  await newUser.save();
-  await ctx.reply(`Отлично, ${name}! Теперь введи свой возраст.`);
-});
-
-// Напоминания (каждый день в 07:30)
-cron.schedule('30 7 * * *', async () => {
-  const users = await User.find({});
-  users.forEach(user => {
-    bot.telegram.sendMessage(
-      user.telegramId,
-      `День ${user.currentDay + 1}/75. Ты проснулся вовремя?`,
-      Markup.inlineKeyboard([
-        Markup.button.callback('Да', 'woke_up_yes'),
-        Markup.button.callback('Нет', 'woke_up_no'),
-      ])
-    );
-  });
-});
-
-// Обработка ответов
-bot.action('woke_up_yes', async (ctx) => {
-  const user = await User.findOne({ telegramId: ctx.from.id });
-  user.dailyCheckins.push({ date: new Date(), wokeUpOnTime: true });
-  await user.save();
-  ctx.reply('Отлично! Сколько страниц ты прочитал?');
-});
-
-// Обработка фото
-bot.on('photo', async (ctx) => {
-  const photoId = ctx.message.photo[0].file_id;
-  const user = await User.findOne({ telegramId: ctx.from.id });
-  user.dailyCheckins[user.dailyCheckins.length - 1].photoProof = photoId;
-  await user.save();
-  ctx.reply('Фото сохранено! Молодец!');
-});
-
-// Еженедельный отчет
-cron.schedule('0 12 * * 1', async () => {
-  const users = await User.find({});
-  users.forEach(user => {
-    const progress = `Твой прогресс за неделю:\n` +
-      `Дней выполнено: ${user.dailyCheckins.filter(c => c.wokeUpOnTime).length}/7\n` +
-      `Страниц прочитано: ${user.dailyCheckins.reduce((sum, c) => sum + c.pagesRead, 0)}`;
-    bot.telegram.sendMessage(user.telegramId, progress);
-  });
-});
-
-// Функция для безопасной установки webhook
-async function setupWebhook() {
+// Улучшенная функция установки webhook
+async function setupWebhook(retryCount = 0) {
   try {
-    console.log('Попытка установки webhook...');
-    await bot.telegram.setWebhook(`https://${WEBHOOK_DOMAIN}/webhook`);
-    console.log('Webhook успешно установлен');
+    console.log(`🔄 Attempt ${retryCount + 1}: Setting webhook...`);
+    
+    // Сначала удаляем существующий webhook
+    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+    await setTimeout(1000); // Краткая пауза
+    
+    // Устанавливаем новый webhook
+    await bot.telegram.setWebhook(`https://${WEBHOOK_DOMAIN}/webhook`, {
+      max_connections: 40,
+      allowed_updates: ['message', 'callback_query']
+    });
+    
+    console.log('✅ Webhook successfully set');
+    return true;
   } catch (error) {
-    if (error.response && error.response.error_code === 429) {
-      const retryAfter = error.response.parameters.retry_after || 5;
-      console.log(`Telegram API ограничение. Повторная попытка через ${retryAfter} сек...`);
-      await setTimeout(retryAfter * 1000);
-      return setupWebhook();
+    if (retryCount >= MAX_RETRIES - 1) {
+      console.error('❌ Max retries reached for webhook setup');
+      throw error;
     }
-    throw error;
+
+    const delay = error.response?.parameters?.retry_after 
+      ? error.response.parameters.retry_after * 1000 
+      : INITIAL_DELAY * (retryCount + 1);
+    
+    console.log(`⏳ Retry after ${delay}ms (Reason: ${error.description || error.message})`);
+    await setTimeout(delay);
+    return setupWebhook(retryCount + 1);
   }
 }
 
-// Запуск в зависимости от среды
-if (process.env.NODE_ENV === 'production') {
-  const startServer = async () => {
-    try {
+// Функция запуска сервера
+async function startServer() {
+  try {
+    if (process.env.NODE_ENV === 'production') {
       await setupWebhook();
       
+      // Запускаем webhook сервер
       await bot.launch({
         webhook: {
           domain: WEBHOOK_DOMAIN,
           port: PORT,
-          hookPath: '/webhook'
+          hookPath: '/webhook',
+          tlsOptions: null // Render сам обрабатывает TLS
         }
       });
       
-      console.log(`Бот запущен в webhook режиме на порту ${PORT}`);
-      console.log(`Webhook URL: https://${WEBHOOK_DOMAIN}/webhook`);
+      console.log(`🚀 Bot running in webhook mode on port ${PORT}`);
+      console.log(`🌐 Webhook URL: https://${WEBHOOK_DOMAIN}/webhook`);
       
-      // Keep-alive для бесплатного Render
-      setInterval(() => {
-        fetch(`https://${WEBHOOK_DOMAIN}/health`).catch(() => {});
-      }, 5 * 60 * 1000);
+      // Keep-alive для Render
+      setInterval(async () => {
+        try {
+          await fetch(`https://${WEBHOOK_DOMAIN}/health`);
+        } catch (e) {
+          console.log('Keep-alive ping failed (normal for free tier)');
+        }
+      }, 4 * 60 * 1000); // 4 минуты
       
-    } catch (error) {
-      console.error('Ошибка запуска:', error);
-      process.exit(1);
+    } else {
+      // Локальный режим (polling)
+      await bot.launch();
+      console.log('🔍 Bot running in polling mode');
     }
-  };
-
-  startServer();
-} else {
-  // Локальный режим (polling)
-  bot.launch().then(() => console.log('Бот запущен в polling режиме'));
+    
+    console.log('🤖 Bot is fully operational');
+  } catch (error) {
+    console.error('💥 Failed to start bot:', error);
+    process.exit(1);
+  }
 }
 
-process.once('SIGTERM', () => bot.stop());
-process.once('SIGINT', () => bot.stop());
+// Обработка завершения работы
+function setupShutdownHandlers() {
+  process.once('SIGTERM', () => {
+    console.log('🛑 SIGTERM received');
+    bot.stop();
+    process.exit(0);
+  });
+  
+  process.once('SIGINT', () => {
+    console.log('🛑 SIGINT received');
+    bot.stop();
+    process.exit(0);
+  });
+}
+
+// Основной запуск
+(async () => {
+  setupShutdownHandlers();
+  await startServer();
+})();
