@@ -1,12 +1,15 @@
-const { Telegraf, Markup } = require('telegraf');
+const { Telegraf } = require('telegraf');
 const mongoose = require('mongoose');
 const cron = require('node-cron');
-const fetch = require('node-fetch');
+const { setTimeout } = require('timers/promises');
 
-// Инициализация
+// Конфигурация
+const BOT_TOKEN = process.env.BOT_TOKEN;
 const PORT = process.env.PORT || 3000;
-const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN || 'seven5dayschallangebot.onrender.com';
-const BOT_TOKEN = process.env.BOT_TOKEN || '8166894974:AAF1smiSyx8G5R5_NUcZC39vtb4J4wMYYtQ';
+const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN;
+
+// Инициализация бота
+const bot = new Telegraf(BOT_TOKEN);
 
 // Подключение к MongoDB
 mongoose.connect('mongodb+srv://dayakimenko666:Ye6G5NcPK6yM2M6O@cluster0.qlpkysv.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0')
@@ -37,9 +40,6 @@ const UserSchema = new mongoose.Schema({
 });
 
 const User = mongoose.model('User', UserSchema);
-
-// Инициализация бота
-const bot = new Telegraf(BOT_TOKEN);
 
 // Health check middleware
 bot.use(async (ctx, next) => {
@@ -105,36 +105,56 @@ cron.schedule('0 12 * * 1', async () => {
   });
 });
 
+// Функция для безопасной установки webhook
+async function setupWebhook() {
+  try {
+    console.log('Попытка установки webhook...');
+    await bot.telegram.setWebhook(`https://${WEBHOOK_DOMAIN}/webhook`);
+    console.log('Webhook успешно установлен');
+  } catch (error) {
+    if (error.response && error.response.error_code === 429) {
+      const retryAfter = error.response.parameters.retry_after || 5;
+      console.log(`Telegram API ограничение. Повторная попытка через ${retryAfter} сек...`);
+      await setTimeout(retryAfter * 1000);
+      return setupWebhook();
+    }
+    throw error;
+  }
+}
+
 // Запуск в зависимости от среды
 if (process.env.NODE_ENV === 'production') {
-  // Добавляем keep-alive для бесплатного Render
-  const keepAlive = () => {
-    const url = `https://${WEBHOOK_DOMAIN}/health`;
-    setInterval(() => {
-      fetch(url).catch(() => {});
-    }, 5 * 60 * 1000); // Пинг каждые 5 минут
+  const startServer = async () => {
+    try {
+      await setupWebhook();
+      
+      await bot.launch({
+        webhook: {
+          domain: WEBHOOK_DOMAIN,
+          port: PORT,
+          hookPath: '/webhook'
+        }
+      });
+      
+      console.log(`Бот запущен в webhook режиме на порту ${PORT}`);
+      console.log(`Webhook URL: https://${WEBHOOK_DOMAIN}/webhook`);
+      
+      // Keep-alive для бесплатного Render
+      setInterval(() => {
+        fetch(`https://${WEBHOOK_DOMAIN}/health`).catch(() => {});
+      }, 5 * 60 * 1000);
+      
+    } catch (error) {
+      console.error('Ошибка запуска:', error);
+      process.exit(1);
+    }
   };
 
-  bot.launch({
-    webhook: {
-      domain: WEBHOOK_DOMAIN,
-      port: PORT,
-      hookPath: '/webhook',
-      tlsOptions: null // Отключаем TLS для Render
-    }
-  }).then(() => {
-    console.log(`Bot running in webhook mode on port ${PORT}`);
-    keepAlive(); // Активируем keep-alive
-    
-    // Дополнительный эндпоинт для wake-up
-    bot.telegram.setWebhook(`https://${WEBHOOK_DOMAIN}/webhook`)
-      .then(() => console.log('Webhook confirmed'));
-  });
-
-  process.once('SIGTERM', () => bot.stop());
+  startServer();
 } else {
   // Локальный режим (polling)
-  console.log('Local development mode');
-  bot.launch().then(() => console.log('Bot launched in polling mode'));
-  process.once('SIGINT', () => bot.stop('SIGINT'));
+  bot.launch().then(() => console.log('Бот запущен в polling режиме'));
 }
+
+process.once('SIGTERM', () => bot.stop());
+process.once('SIGINT', () => bot.stop());
