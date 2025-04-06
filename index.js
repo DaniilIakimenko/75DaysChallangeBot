@@ -1,4 +1,4 @@
-const { Telegraf, Markup } = require('telegraf');
+const { Telegraf, Markup, session } = require('telegraf'); // Изменено здесь
 const mongoose = require('mongoose');
 const cron = require('node-cron');
 const { setTimeout } = require('timers/promises');
@@ -46,7 +46,7 @@ const UserSchema = new mongoose.Schema({
 const User = mongoose.model('User', UserSchema);
 
 // Добавляем сессии
-bot.use(Telegraf.session());
+bot.use(session()); // Изменено здесь
 
 // Команда /start
 bot.start(async (ctx) => {
