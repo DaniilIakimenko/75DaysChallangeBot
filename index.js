@@ -61,14 +61,74 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
-// ... (ваши обработчики команд остаются без изменений) ...
+// Команда /start
+bot.start(async (ctx) => {
+  await ctx.reply('Привет! Это бот для 75-дневного челленджа. Как тебя зовут?');
+});
 
-// Улучшенная функция установки webhook
+// Обработка имени
+bot.on('text', async (ctx) => {
+  const name = ctx.message.text;
+  const newUser = new User({ telegramId: ctx.from.id, name });
+  await newUser.save();
+  await ctx.reply(`Отлично, ${name}! Теперь введи свой возраст.`);
+});
+
+// Напоминания (каждый день в 07:30)
+cron.schedule('30 7 * * *', async () => {
+  const users = await User.find({});
+  users.forEach(user => {
+    bot.telegram.sendMessage(
+      user.telegramId,
+      `День ${user.currentDay + 1}/75. Ты проснулся вовремя?`,
+      Markup.inlineKeyboard([
+        Markup.button.callback('Да', 'woke_up_yes'),
+        Markup.button.callback('Нет', 'woke_up_no'),
+      ])
+    );
+  });
+});
+
+// Обработка ответов
+bot.action('woke_up_yes', async (ctx) => {
+  const user = await User.findOne({ telegramId: ctx.from.id });
+  user.dailyCheckins.push({ date: new Date(), wokeUpOnTime: true });
+  await user.save();
+  ctx.reply('Отлично! Сколько страниц ты прочитал?');
+});
+
+// Обработка фото
+bot.on('photo', async (ctx) => {
+  const photoId = ctx.message.photo[0].file_id;
+  const user = await User.findOne({ telegramId: ctx.from.id });
+  user.dailyCheckins[user.dailyCheckins.length - 1].photoProof = photoId;
+  await user.save();
+  ctx.reply('Фото сохранено! Молодец!');
+});
+
+// Еженедельный отчет
+cron.schedule('0 12 * * 1', async () => {
+  const users = await User.find({});
+  users.forEach(user => {
+    const progress = `Твой прогресс за неделю:\n` +
+      `Дней выполнено: ${user.dailyCheckins.filter(c => c.wokeUpOnTime).length}/7\n` +
+      `Страниц прочитано: ${user.dailyCheckins.reduce((sum, c) => sum + c.pagesRead, 0)}`;
+    bot.telegram.sendMessage(user.telegramId, progress);
+  });
+});
+
 async function setupWebhook(retryCount = 0) {
   try {
     console.log(`🔄 Attempt ${retryCount + 1}: Setting webhook...`);
     
-    // Сначала удаляем существующий webhook
+    // Проверяем текущий webhook
+    const currentWebhook = await bot.telegram.getWebhookInfo();
+    if (currentWebhook.url === `https://${WEBHOOK_DOMAIN}/webhook`) {
+      console.log('✅ Webhook already set correctly');
+      return true;
+    }
+
+    // Удаляем существующий webhook
     await bot.telegram.deleteWebhook({ drop_pending_updates: true });
     await setTimeout(1000); // Краткая пауза
     
@@ -88,7 +148,7 @@ async function setupWebhook(retryCount = 0) {
 
     const delay = error.response?.parameters?.retry_after 
       ? error.response.parameters.retry_after * 1000 
-      : INITIAL_DELAY * (retryCount + 1);
+      : INITIAL_DELAY * (retryCount + 1) + Math.random() * 1000; // Случайная задержка
     
     console.log(`⏳ Retry after ${delay}ms (Reason: ${error.description || error.message})`);
     await setTimeout(delay);
@@ -97,7 +157,7 @@ async function setupWebhook(retryCount = 0) {
 }
 
 // Функция запуска сервера
-async function startServer() {
+async function startServer(retryCount = 0) {
   try {
     if (process.env.NODE_ENV === 'production') {
       await setupWebhook();
@@ -132,24 +192,19 @@ async function startServer() {
     
     console.log('🤖 Bot is fully operational');
   } catch (error) {
+    if (error.code === 429 && retryCount < MAX_RETRIES) {
+      const delay = error.response?.parameters?.retry_after 
+        ? error.response.parameters.retry_after * 1000 
+        : INITIAL_DELAY * (retryCount + 1) + Math.random() * 1000;
+      
+      console.log(`⏳ Bot launch failed with 429, retrying after ${delay}ms`);
+      await setTimeout(delay);
+      return startServer(retryCount + 1);
+    }
+    
     console.error('💥 Failed to start bot:', error);
     process.exit(1);
   }
-}
-
-// Обработка завершения работы
-function setupShutdownHandlers() {
-  process.once('SIGTERM', () => {
-    console.log('🛑 SIGTERM received');
-    bot.stop();
-    process.exit(0);
-  });
-  
-  process.once('SIGINT', () => {
-    console.log('🛑 SIGINT received');
-    bot.stop();
-    process.exit(0);
-  });
 }
 
 // Основной запуск
