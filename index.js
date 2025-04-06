@@ -1,15 +1,11 @@
 const { Telegraf, Markup } = require('telegraf');
 const mongoose = require('mongoose');
 const cron = require('node-cron');
-const express = require('express');
-const http = require('http');
 
-// Инициализация Express
-const app = express();
+// Инициализация
 const PORT = process.env.PORT || 3000;
-
-// Health check для Render
-app.get('/', (req, res) => res.send('75 Days Challenge Bot is running'));
+const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN || 'seven5dayschallangebot.onrender.com';
+const BOT_TOKEN = process.env.BOT_TOKEN || '8166894974:AAF1smiSyx8G5R5_NUcZC39vtb4J4wMYYtQ';
 
 // Подключение к MongoDB
 mongoose.connect('mongodb+srv://dayakimenko666:Ye6G5NcPK6yM2M6O@cluster0.qlpkysv.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0')
@@ -42,7 +38,15 @@ const UserSchema = new mongoose.Schema({
 const User = mongoose.model('User', UserSchema);
 
 // Инициализация бота
-const bot = new Telegraf(process.env.BOT_TOKEN || '8166894974:AAF1smiSyx8G5R5_NUcZC39vtb4J4wMYYtQ');
+const bot = new Telegraf(BOT_TOKEN);
+
+// Health check middleware
+bot.use(async (ctx, next) => {
+  if (ctx.webhookReply && ctx.update.url === '/health') {
+    return ctx.reply('Bot is healthy');
+  }
+  return next();
+});
 
 // Команда /start
 bot.start(async (ctx) => {
@@ -102,35 +106,23 @@ cron.schedule('0 12 * * 1', async () => {
 
 // Запуск в зависимости от среды
 if (process.env.NODE_ENV === 'production') {
-  // Создаем HTTP сервер
-  const server = http.createServer(app);
-  
-  // Запускаем сервер
-  server.listen(PORT, () => {
-    console.log(`Server started on port ${PORT}`);
-    
-    // Настраиваем webhook после запуска сервера
-    bot.launch({
-      webhook: {
-        domain: 'seven5dayschallangebot.onrender.com',
-        port: PORT,
-        hookPath: '/telegraf' // Уникальный путь для webhook
-      }
-    }).then(() => {
-      console.log('Bot launched in webhook mode');
-      console.log(`Webhook set on: https://seven5dayschallangebot.onrender.com/telegraf`);
-    });
+  // Production режим (Webhook)
+  bot.launch({
+    webhook: {
+      domain: WEBHOOK_DOMAIN,
+      port: PORT,
+      hookPath: '/webhook'  // Явно указываем путь для webhook
+    }
+  }).then(() => {
+    console.log(`Bot running in webhook mode on port ${PORT}`);
+    console.log(`Webhook URL: https://${WEBHOOK_DOMAIN}/webhook`);
+    console.log(`Health check: https://${WEBHOOK_DOMAIN}/health`);
   });
   
-  // Обработка завершения
-  process.once('SIGTERM', () => {
-    server.close();
-    bot.stop();
-  });
+  process.once('SIGTERM', () => bot.stop());
 } else {
-  // Локальный режим (polling)
-  console.log('Local development mode');
+  // Development режим (Polling)
+  console.log('Local development mode (polling)');
   bot.launch().then(() => console.log('Bot launched in polling mode'));
-  
   process.once('SIGINT', () => bot.stop('SIGINT'));
 }
