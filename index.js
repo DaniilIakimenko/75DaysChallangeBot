@@ -1,6 +1,7 @@
 const { Telegraf, Markup } = require('telegraf');
 const mongoose = require('mongoose');
 const cron = require('node-cron');
+const fetch = require('node-fetch');
 
 // Инициализация
 const PORT = process.env.PORT || 3000;
@@ -106,23 +107,34 @@ cron.schedule('0 12 * * 1', async () => {
 
 // Запуск в зависимости от среды
 if (process.env.NODE_ENV === 'production') {
-  // Production режим (Webhook)
+  // Добавляем keep-alive для бесплатного Render
+  const keepAlive = () => {
+    const url = `https://${WEBHOOK_DOMAIN}/health`;
+    setInterval(() => {
+      fetch(url).catch(() => {});
+    }, 5 * 60 * 1000); // Пинг каждые 5 минут
+  };
+
   bot.launch({
     webhook: {
       domain: WEBHOOK_DOMAIN,
       port: PORT,
-      hookPath: '/webhook'  // Явно указываем путь для webhook
+      hookPath: '/webhook',
+      tlsOptions: null // Отключаем TLS для Render
     }
   }).then(() => {
     console.log(`Bot running in webhook mode on port ${PORT}`);
-    console.log(`Webhook URL: https://${WEBHOOK_DOMAIN}/webhook`);
-    console.log(`Health check: https://${WEBHOOK_DOMAIN}/health`);
+    keepAlive(); // Активируем keep-alive
+    
+    // Дополнительный эндпоинт для wake-up
+    bot.telegram.setWebhook(`https://${WEBHOOK_DOMAIN}/webhook`)
+      .then(() => console.log('Webhook confirmed'));
   });
-  
+
   process.once('SIGTERM', () => bot.stop());
 } else {
-  // Development режим (Polling)
-  console.log('Local development mode (polling)');
+  // Локальный режим (polling)
+  console.log('Local development mode');
   bot.launch().then(() => console.log('Bot launched in polling mode'));
   process.once('SIGINT', () => bot.stop('SIGINT'));
 }
