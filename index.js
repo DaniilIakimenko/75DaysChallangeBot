@@ -2,6 +2,7 @@ const { Telegraf, Markup } = require('telegraf');
 const mongoose = require('mongoose');
 const cron = require('node-cron');
 const express = require('express');
+const http = require('http');
 
 // Инициализация Express
 const app = express();
@@ -101,22 +102,35 @@ cron.schedule('0 12 * * 1', async () => {
 
 // Запуск в зависимости от среды
 if (process.env.NODE_ENV === 'production') {
-  // Режим для Render (webhook)
-  app.listen(PORT, () => {
+  // Создаем HTTP сервер
+  const server = http.createServer(app);
+  
+  // Запускаем сервер
+  server.listen(PORT, () => {
     console.log(`Server started on port ${PORT}`);
+    
+    // Настраиваем webhook после запуска сервера
     bot.launch({
       webhook: {
         domain: 'seven5dayschallangebot.onrender.com',
-        port: PORT
+        port: PORT,
+        hookPath: '/telegraf' // Уникальный путь для webhook
       }
-    }).then(() => console.log('Bot launched in webhook mode'));
+    }).then(() => {
+      console.log('Bot launched in webhook mode');
+      console.log(`Webhook set on: https://seven5dayschallangebot.onrender.com/telegraf`);
+    });
+  });
+  
+  // Обработка завершения
+  process.once('SIGTERM', () => {
+    server.close();
+    bot.stop();
   });
 } else {
   // Локальный режим (polling)
   console.log('Local development mode');
   bot.launch().then(() => console.log('Bot launched in polling mode'));
+  
+  process.once('SIGINT', () => bot.stop('SIGINT'));
 }
-
-// Обработка завершения
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
