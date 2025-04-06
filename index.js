@@ -201,12 +201,11 @@ async function ensurePortIsFree(port) {
 async function startServer(retryCount = 0) {
   try {
     if (process.env.NODE_ENV === 'production') {
+      console.log('🌍 Starting in production mode');
       await setupWebhook();
       
-      // Убеждаемся, что порт свободен
       await ensurePortIsFree(PORT);
 
-      // Запускаем webhook сервер
       await bot.launch({
         webhook: {
           domain: WEBHOOK_DOMAIN,
@@ -222,12 +221,16 @@ async function startServer(retryCount = 0) {
       // Keep-alive для Render
       setInterval(async () => {
         try {
+          console.log('🔄 Sending keep-alive ping');
           await fetch(`https://${WEBHOOK_DOMAIN}/health`);
+          console.log('✅ Keep-alive ping successful');
         } catch (e) {
-          console.log('Keep-alive ping failed (normal for free tier)');
+          console.log('❌ Keep-alive ping failed:', e.message);
         }
-      }, 4 * 60 * 1000);
+      }, 2 * 60 * 1000); // Уменьшено до 2 минут для теста
+      
     } else {
+      console.log('🔍 Starting in polling mode');
       await bot.launch();
       console.log('🔍 Bot running in polling mode');
     }
@@ -240,12 +243,12 @@ async function startServer(retryCount = 0) {
         : INITIAL_DELAY * (retryCount + 1) + Math.random() * 1000;
       
       console.log(`⏳ Bot launch failed with 429, retrying after ${delay}ms`);
-      await bot.stop(); // Останавливаем бота перед повторной попыткой
+      await bot.stop();
       await setTimeout(delay);
       return startServer(retryCount + 1);
     } else if (error.code === 'EADDRINUSE' && retryCount < MAX_RETRIES) {
       console.log(`⏳ Port ${PORT} is in use, retrying after delay...`);
-      await bot.stop(); // Останавливаем бота
+      await bot.stop();
       await setTimeout(INITIAL_DELAY * (retryCount + 1));
       return startServer(retryCount + 1);
     }
@@ -272,6 +275,8 @@ function setupShutdownHandlers() {
 
 // Основной запуск
 (async () => {
+  console.log('🔧 Setting up shutdown handlers');
   setupShutdownHandlers();
+  console.log('🚀 Initiating server start');
   await startServer();
 })();
