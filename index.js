@@ -162,6 +162,22 @@ async function startServer(retryCount = 0) {
     if (process.env.NODE_ENV === 'production') {
       await setupWebhook();
       
+      // Проверяем, не занят ли порт перед запуском
+      const server = require('net').createServer();
+      await new Promise((resolve, reject) => {
+        server.once('error', (err) => {
+          if (err.code === 'EADDRINUSE') {
+            console.log(`⚠️ Port ${PORT} is already in use, attempting to recover...`);
+            reject(err);
+          }
+        });
+        server.once('listening', () => {
+          server.close();
+          resolve();
+        });
+        server.listen(PORT);
+      });
+
       // Запускаем webhook сервер
       await bot.launch({
         webhook: {
@@ -199,6 +215,10 @@ async function startServer(retryCount = 0) {
       
       console.log(`⏳ Bot launch failed with 429, retrying after ${delay}ms`);
       await setTimeout(delay);
+      return startServer(retryCount + 1);
+    } else if (error.code === 'EADDRINUSE' && retryCount < MAX_RETRIES) {
+      console.log(`⏳ Port ${PORT} is in use, retrying after delay...`);
+      await setTimeout(INITIAL_DELAY * (retryCount + 1));
       return startServer(retryCount + 1);
     }
     
